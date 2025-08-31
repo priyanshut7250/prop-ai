@@ -1,0 +1,108 @@
+import os
+import logging
+from flask import Flask, render_template, request, jsonify, session
+from werkzeug.middleware.proxy_fix import ProxyFix
+from gemini_service import get_chat_response
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Create the app
+app = Flask(__name__)
+app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key-change-in-production")
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+@app.route('/')
+def index():
+    """Main chat interface page"""
+    # Initialize chat history in session if not exists
+    if 'chat_history' not in session:
+        session['chat_history'] = []
+    return render_template('index.html')
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """Handle chat messages and return AI responses"""
+    try:
+        # Get user message from request
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid request format'
+            }), 400
+        
+        user_message = data.get('message', '').strip()
+        
+        if not user_message:
+            return jsonify({
+                'success': False,
+                'error': 'Please enter a message'
+            }), 400
+        
+        # Initialize chat history if not exists
+        if 'chat_history' not in session:
+            session['chat_history'] = []
+        
+        # Add user message to chat history
+        session['chat_history'].append({
+            'type': 'user',
+            'message': user_message
+        })
+        
+        # Get AI response from Gemini
+        ai_response = get_chat_response(user_message)
+        
+        # Add AI response to chat history
+        session['chat_history'].append({
+            'type': 'ai',
+            'message': ai_response
+        })
+        
+        # Save session
+        session.modified = True
+        
+        return jsonify({
+            'success': True,
+            'response': ai_response
+        })
+        
+    except Exception as e:
+        logging.error(f"Error in chat endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Sorry, I encountered an error while processing your request. Please try again.'
+        }), 500
+
+@app.route('/clear_chat', methods=['POST'])
+def clear_chat():
+    """Clear the chat history"""
+    try:
+        session['chat_history'] = []
+        session.modified = True
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"Error clearing chat: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to clear chat history'
+        }), 500
+
+@app.route('/get_history')
+def get_history():
+    """Get current chat history"""
+    try:
+        history = session.get('chat_history', [])
+        return jsonify({
+            'success': True,
+            'history': history
+        })
+    except Exception as e:
+        logging.error(f"Error getting history: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to retrieve chat history'
+        }), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
